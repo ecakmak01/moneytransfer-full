@@ -1,0 +1,81 @@
+version: "3.9"
+
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: moneytransfer-full-postgres-1
+    environment:
+      POSTGRES_DB: moneytransfer
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
+  account-service:
+    build:
+      context: ./account-service
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=moneytransfer;Username=postgres;Password=postgres
+      Jwt__Key: super_secret_key_12345_very_secure_67890
+      Jwt__Issuer: money-app
+      Jwt__Audience: money-clients
+    ports:
+      - "5001:8080"
+
+  moneytransfer-service:
+    build:
+      context: ./moneytransfer-service
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=moneytransfer;Username=postgres;Password=postgres
+      Jwt__Key: super_secret_key_12345_very_secure_67890
+      Jwt__Issuer: money-app
+      Jwt__Audience: money-clients
+    ports:
+      - "5002:8080"
+
+  gateway-bff:
+    build:
+      context: ./gateway-bff
+      dockerfile: Dockerfile
+    depends_on:
+      - account-service
+      - moneytransfer-service
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Services__Account: http://account-service:8080
+      Services__Transfer: http://moneytransfer-service:8080
+      Jwt__Key: super_secret_key_12345_very_secure_67890
+      Jwt__Issuer: money-app
+      Jwt__Audience: money-clients
+    ports:
+      - "8080:8080"
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    depends_on:
+      - gateway-bff
+    ports:
+      - "3000:80"
+
+volumes:
+  pgdata:

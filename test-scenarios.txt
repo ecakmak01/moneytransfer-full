@@ -1,0 +1,26 @@
+# Basit Test Senaryoları
+
+## 1. Token Alma
+- **Adım**: /auth/token endpoint'ine username gönder
+- **Beklenen**: JWT token dönmeli (200 OK)
+
+## 2. Hesap Oluşturma
+- **Adım**: /api/accounts POST ile accountNumber ve owner gönder
+- **Beklenen**: 201 Created ve hesap bilgileri dönmeli
+
+## 3. Hesap Listeleme
+- **Adım**: /api/accounts GET
+- **Beklenen**: 200 OK ve hesap listesi
+
+## 4. Bakiye Güncelleme (Idempotent)
+- **Adım**: /api/accounts/{id}/balance POST delta=100
+- **Header**: Idempotency-Key: X123
+- **Beklenen**: 200 OK
+
+## 5. Idempotent Tekrar Gönderme
+- **Adım**: Aynı isteği tekrar gönder
+- **Beklenen**: 409 Conflict
+
+## 6. Transfer
+- **Adım**: /transfer endpoint'ine body gönder
+- **Beklenen**: 200 OK veya uygun hata

@@ -1,0 +1,22 @@
+
+postgres:
+  image: postgres:16
+  username: postgres
+  password: postgres
+  database: moneytransfer
+
+accountService:
+  image: account-service:latest
+  port: 8080
+
+moneytransferService:
+  image: moneytransfer-service:latest
+  port: 8080
+
+gatewayBff:
+  image: gateway-bff:latest
+  port: 8080
+
+ui:
+  image: ui:latest
+  port: 80

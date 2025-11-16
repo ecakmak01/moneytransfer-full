@@ -1,0 +1,12 @@
+# Visual Studio cache
+.vs/
+*.vsidx
+*.suo
+*.user
+
+# Build output
+bin/
+obj/
+
+# Docker junk
+**/node_modules/

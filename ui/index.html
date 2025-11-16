@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Money Transfer UI</title>
+  <style>
+    body { font-family: Arial; margin: 20px; }
+    .section { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+    label { display: block; margin-top: 8px; }
+    input { padding: 6px; width: 200px; }
+    button { margin-top: 10px; padding: 6px 12px; cursor: pointer; }
+    pre { background: #f5f5f5; padding: 10px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    th, td { padding: 6px; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+
+<h1>Money Transfer Demo</h1>
+
+<!-- TOKEN AL -->
+<div class="section">
+  <h2>1. JWT Token Al</h2>
+  <label>Kullanıcı adı: <input id="username" value="emre" /></label>
+  <button onclick="getToken()">Token Al</button>
+  <pre id="tokenBox"></pre>
+</div>
+
+<!-- BAKİYE GÜNCELLE -->
+<div class="section">
+  <h2>2. Hesap Bakiyesi Güncelle</h2>
+  <label>Hesap ID: <input id="accId" value="1" /></label>
+  <label>Delta (+100 / -50): <input id="delta" value="100" /></label>
+  <button onclick="updateBalance()">Güncelle</button>
+  <pre id="balanceResult"></pre>
+</div>
+
+<!-- TRANSFER BAŞLAT -->
+<div class="section">
+  <h2>3. Transfer Başlat</h2>
+  <label>Gönderen Hesap ID: <input id="fromId" value="1" /></label>
+  <label>Alıcı Hesap ID: <input id="toId" value="2" /></label>
+  <label>Tutar: <input id="amount" value="100" /></label>
+  <button onclick="startTransfer()">Gönder</button>
+  <pre id="startResult"></pre>
+</div>
+
+<!-- TRANSFER LİSTE -->
+<div class="section">
+  <h2>4. Transfer Listele</h2>
+  <button onclick="listTransfers()">Yenile</button>
+
+  <table id="transferTable">
+    <thead>
+      <tr>
+        <th>ID</th><th>Gönderen</th><th>Alıcı</th><th>Tutar</th><th>Durum</th><th>Tarih</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<script>
+  const API = "http://localhost:8080";
+  let token = "";
+
+  // TOKEN AL
+ async function getToken() {
+    const resp = await fetch(`${API}/auth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: document.getElementById("username").value })
+    });
+
+    const raw = await resp.text();
+
+    try {
+        const json = JSON.parse(raw);
+        token = json.token;
+    } catch {
+        token = raw.trim().replace(/^"|"$/g, "");
+    }
+
+    console.log("TOKEN:", token);
+    document.getElementById("tokenBox").textContent = token;
+}
+
+
+  // BAKİYE GÜNCELLE
+  async function updateBalance() {
+    if (!token) return alert("Önce token al!");
+
+    const id = document.getElementById("accId").value;
+    const delta = parseFloat(document.getElementById("delta").value);
+
+    const resp = await fetch(`${API}/accounts/${id}/balance`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token
+      },
+      body: JSON.stringify({ delta })
+    });
+
+    document.getElementById("balanceResult").textContent = await resp.text();
+  }
+
+// TRANSFER BAŞLAT
+async function startTransfer() {
+  if (!token) return alert("Önce token al!");
+
+  const fromId = parseInt(document.getElementById("fromId").value);
+  const toId   = parseInt(document.getElementById("toId").value);
+  const amount = parseFloat(document.getElementById("amount").value);
+
+  //  Idempotency-Key üret
+  const idemKey = (crypto.randomUUID && crypto.randomUUID())
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random()}`;
+
+  const resp = await fetch(`${API}/transfer`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + token,
+      "Idempotency-Key": idemKey
+    },
+    body: JSON.stringify({
+      fromAccountId: fromId,
+      toAccountId: toId,
+      amount
+    })
+  });
+
+  document.getElementById("startResult").textContent = await resp.text();
+}
+
+
+  // TRANSFER LİSTE
+  async function listTransfers() {
+    if (!token) return alert("Önce token al!");
+
+    const resp = await fetch(`${API}/transfer`, {
+      headers: { "Authorization": "Bearer " + token }
+    });
+
+    const raw = await resp.text();
+    let data = [];
+    try { data = JSON.parse(raw); } catch { return alert("JSON parse hatası"); }
+
+    const tbody = document.querySelector("#transferTable tbody");
+    tbody.innerHTML = "";
+
+    data.forEach(t => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${t.id}</td>
+        <td>${t.fromAccountId}</td>
+        <td>${t.toAccountId}</td>
+        <td>${t.amount}</td>
+        <td>${t.status}</td>
+        <td>${t.createdAt}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+</script>
+
+</body>
+</html>
