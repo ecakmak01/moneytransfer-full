@@ -20,13 +20,31 @@ public class AccountsController : ControllerBase
         _logger = logger;
     }
 
+    private (string CorrelationId, string TraceId) GetLogContext()
+    {
+        var correlationId = HttpContext.Response.Headers["X-Correlation-ID"].FirstOrDefault();
+        var traceId = HttpContext.TraceIdentifier;
+
+        return (correlationId ?? "-", traceId ?? "-");
+    }
+
     // -----------------------------------------------------
     // GET /api/accounts
     // -----------------------------------------------------
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
+        var ctx = GetLogContext();
+
+        _logger.LogInformation("ACCOUNT_LIST_REQUEST {@log}", new
+        {
+            ctx.CorrelationId,
+            ctx.TraceId,
+            Path = HttpContext.Request.Path
+        });
+
         var accounts = await _db.Accounts.AsNoTracking().ToListAsync();
+
         return Ok(accounts);
     }
 
@@ -36,6 +54,15 @@ public class AccountsController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)
     {
+        var ctx = GetLogContext();
+
+        _logger.LogInformation("ACCOUNT_GET_REQUEST {@log}", new
+        {
+            ctx.CorrelationId,
+            ctx.TraceId,
+            AccountId = id
+        });
+
         var acc = await _db.Accounts.FindAsync(id);
         if (acc == null)
             return NotFound(new { message = "Account not found" });
@@ -49,10 +76,20 @@ public class AccountsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] Account account)
     {
+        var ctx = GetLogContext();
+
+        _logger.LogInformation("ACCOUNT_CREATE_REQUEST {@log}", new
+        {
+            ctx.CorrelationId,
+            ctx.TraceId,
+            Owner = account.Owner
+        });
+
         if (string.IsNullOrWhiteSpace(account.Owner))
             return BadRequest(new { message = "Invalid account" });
 
         account.Balance = 0;
+
         _db.Accounts.Add(account);
         await _db.SaveChangesAsync();
 
@@ -61,26 +98,38 @@ public class AccountsController : ControllerBase
 
     // -----------------------------------------------------
     // PUT /api/accounts/{id}/balance
-    // Idempotency + Delta Ýþlemi (+/-)
     // -----------------------------------------------------
     public class UpdateBalanceDto
     {
-        public decimal Delta { get; set; }   // +100 veya -50
+        public decimal Delta { get; set; } // +100 veya -50
     }
 
     [HttpPut("{id:int}/balance")]
     public async Task<IActionResult> UpdateBalance(int id, [FromBody] UpdateBalanceDto dto)
     {
-        var correlationId = Request.Headers["X-Correlation-ID"].FirstOrDefault();
-        var idempotencyKey = Request.Headers["Idempotency-Key"].FirstOrDefault();
+        var ctx = GetLogContext();
 
+        _logger.LogInformation("ACCOUNT_BALANCE_UPDATE_REQUEST {@log}", new
+        {
+            ctx.CorrelationId,
+            ctx.TraceId,
+            AccountId = id,
+            Delta = dto.Delta
+        });
+
+        var idempotencyKey = Request.Headers["Idempotency-Key"].FirstOrDefault();
         if (string.IsNullOrEmpty(idempotencyKey))
             return BadRequest(new { message = "Idempotency-Key header required" });
 
-        // Ayný idempotency gelirse tekrarlama engellenir
         var existing = await _db.IdempotencyKeys.FirstOrDefaultAsync(x => x.Key == idempotencyKey);
         if (existing != null)
         {
+            _logger.LogWarning("DUPLICATE_IDEMPOTENCY {@log}", new
+            {
+                ctx.CorrelationId,
+                ctx.TraceId,
+                IdempotencyKey = idempotencyKey
+            });
             return StatusCode(409, new { message = "Duplicate request" });
         }
 
@@ -97,7 +146,6 @@ public class AccountsController : ControllerBase
 
             acc.Balance = newBalance;
 
-            // Idempotency kayýt
             _db.IdempotencyKeys.Add(new IdempotencyKey
             {
                 Key = idempotencyKey,
@@ -106,6 +154,14 @@ public class AccountsController : ControllerBase
 
             await _db.SaveChangesAsync();
             await tx.CommitAsync();
+
+            _logger.LogInformation("ACCOUNT_BALANCE_UPDATED {@log}", new
+            {
+                ctx.CorrelationId,
+                ctx.TraceId,
+                AccountId = id,
+                NewBalance = acc.Balance
+            });
 
             return Ok(new
             {
@@ -116,7 +172,11 @@ public class AccountsController : ControllerBase
         catch (Exception ex)
         {
             await tx.RollbackAsync();
-            _logger.LogError(ex, "Balance update error");
+            _logger.LogError(ex, "BALANCE_UPDATE_ERROR {@log}", new
+            {
+                ctx.CorrelationId,
+                ctx.TraceId
+            });
             return StatusCode(500, new { message = "Internal error" });
         }
     }

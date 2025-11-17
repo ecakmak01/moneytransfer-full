@@ -19,3 +19,5 @@ COPY --from=build /app .
 
 ENV ASPNETCORE_URLS=http://+:8080
 ENTRYPOINT ["dotnet", "Account.Api.dll"]
+
+

@@ -46,6 +46,14 @@ builder.Services
 
 builder.Services.AddAuthorization();
 
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+});
+
+
 var app = builder.Build();
 
 app.Use(async (ctx, next) =>

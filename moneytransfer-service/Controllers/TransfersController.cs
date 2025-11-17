@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+ï»¿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MoneyTransferService.Data;
@@ -23,13 +23,31 @@ public class TransfersController : ControllerBase
         _logger = logger;
     }
 
+    // Helper â†’ Log context
+    private (string CorrelationId, string TraceId) GetLogContext()
+    {
+        var correlationId = HttpContext.Response.Headers["X-Correlation-ID"].FirstOrDefault();
+        var traceId = HttpContext.TraceIdentifier;
+
+        return (correlationId ?? "-", traceId ?? "-");
+    }
+
     // --------------------------------------------------------------------
     // GET: /api/transfers
-    // Tüm transfer geçmiþi
+    // TÃ¼m transfer geÃ§miÅŸi
     // --------------------------------------------------------------------
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
+        var ctx = GetLogContext();
+
+        _logger.LogInformation("TRANSFER_LIST_REQUEST {@log}", new
+        {
+            ctx.CorrelationId,
+            ctx.TraceId,
+            Path = HttpContext.Request.Path
+        });
+
         var list = await _db.Transfers
             .AsNoTracking()
             .OrderByDescending(x => x.CreatedAt)
@@ -45,6 +63,15 @@ public class TransfersController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)
     {
+        var ctx = GetLogContext();
+
+        _logger.LogInformation("TRANSFER_GET_REQUEST {@log}", new
+        {
+            ctx.CorrelationId,
+            ctx.TraceId,
+            TransferId = id
+        });
+
         var transfer = await _db.Transfers.FindAsync(id);
 
         if (transfer == null)
@@ -61,12 +88,23 @@ public class TransfersController : ControllerBase
 
     // --------------------------------------------------------------------
     // POST: /api/transfers
-    // Idempotent transfer baþlatma
+    // Idempotent transfer baÅŸlatma
     // --------------------------------------------------------------------
     [HttpPost]
     public async Task<IActionResult> Start([FromBody] StartTransferRequest request)
     {
-        // 1) GEÇERSÝZ TUTAR KONTROLÜ
+        var ctx = GetLogContext();
+
+        _logger.LogInformation("TRANSFER_START_REQUEST {@log}", new
+        {
+            ctx.CorrelationId,
+            ctx.TraceId,
+            request.FromAccountId,
+            request.ToAccountId,
+            request.Amount
+        });
+
+        // 1) GEÃ‡ERSÄ°Z TUTAR KONTROLÃœ
         if (request.Amount <= 0)
             return BadRequest(new { message = "Amount must be greater than 0." });
 
@@ -85,7 +123,15 @@ public class TransfersController : ControllerBase
         var bearerToken = bearerHeader.Replace("Bearer ", "");
 
         if (string.IsNullOrWhiteSpace(bearerToken))
+        {
+            _logger.LogWarning("TRANSFER_START_UNAUTHORIZED {@log}", new
+            {
+                ctx.CorrelationId,
+                ctx.TraceId
+            });
+
             return Unauthorized(new { message = "Bearer token missing." });
+        }
 
         try
         {
@@ -98,21 +144,47 @@ public class TransfersController : ControllerBase
                 bearerToken
             );
 
+            _logger.LogInformation("TRANSFER_CREATED {@log}", new
+            {
+                ctx.CorrelationId,
+                ctx.TraceId,
+                TransferId = transfer.Id
+            });
+
             return CreatedAtAction(nameof(GetById), new { id = transfer.Id }, transfer);
         }
         catch (InvalidOperationException ex)
         {
             // Bakiye yetersiz vs.
+            _logger.LogWarning("TRANSFER_START_INVALID_OPERATION {@log}", new
+            {
+                ctx.CorrelationId,
+                ctx.TraceId,
+                Error = ex.Message
+            });
+
             return BadRequest(new { message = ex.Message });
         }
         catch (ArgumentException ex)
         {
-            // Geçersiz hesap
+            // GeÃ§ersiz hesap
+            _logger.LogWarning("TRANSFER_START_ARGUMENT_ERROR {@log}", new
+            {
+                ctx.CorrelationId,
+                ctx.TraceId,
+                Error = ex.Message
+            });
+
             return BadRequest(new { message = ex.Message });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unexpected error in Start Transfer");
+            _logger.LogError(ex, "TRANSFER_START_FATAL_ERROR {@log}", new
+            {
+                ctx.CorrelationId,
+                ctx.TraceId
+            });
+
             return StatusCode(500, new { message = "Internal server error" });
         }
     }

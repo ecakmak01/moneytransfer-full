@@ -1,93 +1,147 @@
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Mvc;
 using System.Text;
+using System.IdentityModel.Tokens.Jwt;
+using Microsoft.IdentityModel.Tokens;
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ==============================
 // CORS
+// ==============================
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowUI", policy =>
-    {
-        policy.AllowAnyOrigin()
-              .AllowAnyMethod()
-              .AllowAnyHeader();
-    });
+    options.AddPolicy("AllowAll", p =>
+        p.AllowAnyOrigin()
+         .AllowAnyHeader()
+         .AllowAnyMethod());
 });
 
-// JWT
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidAudience = builder.Configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
-        };
-    });
-
-builder.Services.AddAuthorization();
 builder.Services.AddHttpClient();
+
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+});
+
 
 var app = builder.Build();
 
-app.UseRouting();        
-app.UseCors("AllowUI");    
-app.UseAuthentication();
-app.UseAuthorization();
+app.UseCors("AllowAll");
 
-// ------------- TOKEN -------------
-app.MapPost("/auth/token", async (HttpContext ctx, IHttpClientFactory f) =>
+// ==============================
+// 1) JWT TOKEN ENDPOINT
+//    POST /auth/token
+// ==============================
+app.MapPost("/auth/token", ([FromBody] TokenRequest req) =>
 {
-    var client = f.CreateClient();
-    var body = await ctx.Request.ReadFromJsonAsync<object>();
+    if (string.IsNullOrWhiteSpace(req.Username))
+        return Results.BadRequest("username required");
 
-    var resp = await client.PostAsJsonAsync("http://account-service:8080/auth/token", body);
-    return Results.Text(await resp.Content.ReadAsStringAsync(), "application/json");
-});
+ 
+    // docker-compose.yml içindeki environment ile AYNI deðerler
+    var keyString = builder.Configuration["Jwt:Key"] 
+                    ?? "super_secret_key_12345_very_secure_67890";
 
-// ------------- TRANSFER POST -------------
-app.MapPost("/transfer", async (HttpContext ctx, IHttpClientFactory f) =>
-{
-    var client = f.CreateClient();
-    var json = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+    var issuer   = builder.Configuration["Jwt:Issuer"]   ?? "money-app";
+    var audience = builder.Configuration["Jwt:Audience"] ?? "money-clients";
 
-    var req = new HttpRequestMessage(HttpMethod.Post, "http://moneytransfer-service:8080/transfer")
+    var key   = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(keyString));
+    var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+    var claims = new[]
     {
-        Content = new StringContent(json, Encoding.UTF8, "application/json")
+        new Claim(ClaimTypes.Name, req.Username)
     };
 
-    // Authorization
-    if (ctx.Request.Headers.TryGetValue("Authorization", out var token))
-        req.Headers.TryAddWithoutValidation("Authorization", token.ToString());
+    var jwt = new JwtSecurityToken(
+        issuer:            issuer,
+        audience:          audience,
+        claims:            claims,
+        notBefore:         DateTime.UtcNow,
+        expires:           DateTime.UtcNow.AddHours(1),
+        signingCredentials: creds);
 
-    //  Idempotency-Key header'ýný aynen aktar
-    if (ctx.Request.Headers.TryGetValue("Idempotency-Key", out var idem))
-        req.Headers.TryAddWithoutValidation("Idempotency-Key", idem.ToString());
+    var token = new JwtSecurityTokenHandler().WriteToken(jwt);
 
-    var resp = await client.SendAsync(req);
-    var content = await resp.Content.ReadAsStringAsync();
+    return Results.Ok(new { token });
+});
 
-    return Results.Text(content, "application/json");
-}).RequireAuthorization();
-
-// ------------- TRANSFER GET -------------
-app.MapGet("/transfer", async (HttpContext ctx, IHttpClientFactory f) =>
+// ==============================
+// 2) ACCOUNT-SERVICE
+//    POST /accounts/{id}/balance
+// ==============================
+app.MapPost("/accounts/{id}/balance", async (HttpContext ctx, int id) =>
 {
-    var client = f.CreateClient();
+    var client = new HttpClient();
 
-    var req = new HttpRequestMessage(HttpMethod.Get, "http://moneytransfer-service:8080/transfer");
+    // JWT forward
+    if (ctx.Request.Headers.TryGetValue("Authorization", out var auth))
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", auth.ToString());
 
-    if (ctx.Request.Headers.TryGetValue("Authorization", out var token))
-        req.Headers.TryAddWithoutValidation("Authorization", token.ToString());
+    var url  = $"http://account-service:8080/api/accounts/{id}/balance";
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
 
-    var resp = await client.SendAsync(req);
-    return Results.Text(await resp.Content.ReadAsStringAsync(), "application/json");
-}).RequireAuthorization();
+    var resp = await client.PostAsync(
+        url,
+        new StringContent(body, Encoding.UTF8, "application/json"));
+
+    ctx.Response.StatusCode = (int)resp.StatusCode;
+    await resp.Content.CopyToAsync(ctx.Response.Body);
+});
+
+// ==============================
+// 3) TRANSFER-SERVICE
+//    POST /transfer
+// ==============================
+app.MapPost("/transfer", async ctx =>
+{
+    var client = new HttpClient();
+
+    // JWT forward
+    if (ctx.Request.Headers.TryGetValue("Authorization", out var auth))
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", auth.ToString());
+
+    // Idempotency-Key & Correlation-ID forward
+    if (ctx.Request.Headers.TryGetValue("Idempotency-Key", out var idem))
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Idempotency-Key", idem.ToString());
+
+    if (ctx.Request.Headers.TryGetValue("X-Correlation-ID", out var corr))
+        client.DefaultRequestHeaders.TryAddWithoutValidation("X-Correlation-ID", corr.ToString());
+
+    var url  = "http://moneytransfer-service:8080/api/transfers";
+    var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+
+    var resp = await client.PostAsync(
+        url,
+        new StringContent(body, Encoding.UTF8, "application/json"));
+
+    ctx.Response.StatusCode = (int)resp.StatusCode;
+    await resp.Content.CopyToAsync(ctx.Response.Body);
+});
+
+// ==============================
+// 4) TRANSFER LÝSTE
+//    GET /transfer
+// ==============================
+app.MapGet("/transfer", async ctx =>
+{
+    var client = new HttpClient();
+
+    if (ctx.Request.Headers.TryGetValue("Authorization", out var auth))
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", auth.ToString());
+
+    var resp = await client.GetAsync("http://moneytransfer-service:8080/api/transfers");
+
+    ctx.Response.StatusCode = (int)resp.StatusCode;
+    await resp.Content.CopyToAsync(ctx.Response.Body);
+});
 
 app.Run();
+
+// ==============================
+// RECORD – En Alta (býrak böyle)
+// ==============================
+public record TokenRequest(string Username);

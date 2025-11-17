@@ -4,14 +4,14 @@
   <meta charset="UTF-8" />
   <title>Money Transfer UI</title>
   <style>
-    body { font-family: Arial; margin: 20px; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
     .section { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
     label { display: block; margin-top: 8px; }
     input { padding: 6px; width: 200px; }
     button { margin-top: 10px; padding: 6px 12px; cursor: pointer; }
-    pre { background: #f5f5f5; padding: 10px; }
+    pre { background: #f5f5f5; padding: 10px; white-space: pre-wrap; }
     table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-    th, td { padding: 6px; border: 1px solid #ccc; }
+    th, td { padding: 6px; border: 1px solid #ccc; text-align: left; }
   </style>
 </head>
 <body>
@@ -53,7 +53,12 @@
   <table id="transferTable">
     <thead>
       <tr>
-        <th>ID</th><th>Gönderen</th><th>Alıcı</th><th>Tutar</th><th>Durum</th><th>Tarih</th>
+        <th>ID</th>
+        <th>Gönderen</th>
+        <th>Alıcı</th>
+        <th>Tutar</th>
+        <th>Durum</th>
+        <th>Tarih</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -65,32 +70,30 @@
   let token = "";
 
   // TOKEN AL
- async function getToken() {
+  async function getToken() {
     const resp = await fetch(`${API}/auth/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: document.getElementById("username").value })
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: document.getElementById("username").value })
     });
 
     const raw = await resp.text();
 
     try {
-        const json = JSON.parse(raw);
-        token = json.token;
+      token = JSON.parse(raw).token;
     } catch {
-        token = raw.trim().replace(/^"|"$/g, "");
+      token = raw.trim().replace(/^"|"$/g, "");
     }
 
     console.log("TOKEN:", token);
-    document.getElementById("tokenBox").textContent = token;
-}
-
+    document.getElementById("tokenBox").textContent = token || "(token alınamadı)";
+  }
 
   // BAKİYE GÜNCELLE
   async function updateBalance() {
     if (!token) return alert("Önce token al!");
 
-    const id = document.getElementById("accId").value;
+    const id    = document.getElementById("accId").value;
     const delta = parseFloat(document.getElementById("delta").value);
 
     const resp = await fetch(`${API}/accounts/${id}/balance`, {
@@ -105,36 +108,25 @@
     document.getElementById("balanceResult").textContent = await resp.text();
   }
 
-// TRANSFER BAŞLAT
-async function startTransfer() {
-  if (!token) return alert("Önce token al!");
+  // TRANSFER BAŞLAT
+  async function startTransfer() {
+    if (!token) return alert("Önce token al!");
 
-  const fromId = parseInt(document.getElementById("fromId").value);
-  const toId   = parseInt(document.getElementById("toId").value);
-  const amount = parseFloat(document.getElementById("amount").value);
+    const fromId = parseInt(document.getElementById("fromId").value);
+    const toId   = parseInt(document.getElementById("toId").value);
+    const amount = parseFloat(document.getElementById("amount").value);
 
-  //  Idempotency-Key üret
-  const idemKey = (crypto.randomUUID && crypto.randomUUID())
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random()}`;
+    const resp = await fetch(`${API}/transfer`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token
+      },
+      body: JSON.stringify({ fromAccountId: fromId, toAccountId: toId, amount })
+    });
 
-  const resp = await fetch(`${API}/transfer`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer " + token,
-      "Idempotency-Key": idemKey
-    },
-    body: JSON.stringify({
-      fromAccountId: fromId,
-      toAccountId: toId,
-      amount
-    })
-  });
-
-  document.getElementById("startResult").textContent = await resp.text();
-}
-
+    document.getElementById("startResult").textContent = await resp.text();
+  }
 
   // TRANSFER LİSTE
   async function listTransfers() {
@@ -146,7 +138,12 @@ async function startTransfer() {
 
     const raw = await resp.text();
     let data = [];
-    try { data = JSON.parse(raw); } catch { return alert("JSON parse hatası"); }
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      alert("JSON parse hatası: " + raw);
+      return;
+    }
 
     const tbody = document.querySelector("#transferTable tbody");
     tbody.innerHTML = "";
